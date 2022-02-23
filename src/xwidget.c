@@ -3953,6 +3953,7 @@ syms_of_xwidget (void)
   defsubr (&Sxwidget_webkit_estimated_load_progress);
   defsubr (&Skill_xwidget);
 
+
   DEFSYM (QCxwidget, ":xwidget");
   DEFSYM (QCtitle, ":title");
 

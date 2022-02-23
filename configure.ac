@@ -4160,8 +4160,16 @@ AC_SUBST(DYNAMIC_LIB_SECONDARY_SUFFIX)
 LIBMODULES=
 HAVE_MODULES=no
 MODULES_OBJ=
-MODULES_SUFFIX="${DYNAMIC_LIB_SUFFIX}"
-MODULES_SECONDARY_SUFFIX="${DYNAMIC_LIB_SECONDARY_SUFFIX}"
+NEED_DYNLIB=no
+case $opsys in
+  cygwin|mingw32) MODULES_SUFFIX=".dll" ;;
+  darwin) MODULES_SUFFIX=".so" ;;
+  *) MODULES_SUFFIX=".so" ;;
+esac
+case "${opsys}" in
+  darwin) MODULES_SECONDARY_SUFFIX='.dylib' ;;
+  *) MODULES_SECONDARY_SUFFIX='' ;;
+esac
 
 # pgtkterm.c uses dlsym
 if test $window_system = pgtk; then
