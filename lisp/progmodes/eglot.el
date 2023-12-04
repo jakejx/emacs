@@ -3052,9 +3052,12 @@ for which LSP on-type-formatting should be requested."
 (defvar eglot-cache-session-completions t
   "If non-nil Eglot caches data during completion sessions.")
 
+(defvar eglot--capf-prev-session nil)
 (defvar eglot--capf-session :none "A cache used by `eglot-completion-at-point'.")
 
-(defun eglot--capf-session-flush (&optional _) (setq eglot--capf-session :none))
+(defun eglot--capf-session-flush (&optional _)
+  (setq eglot--capf-session :none)
+  (setq eglot--capf-prev-session nil))
 
 (defun eglot--dumb-flex (pat comp ignorecase)
   "Return destructively fontified COMP iff PAT matches it."
@@ -3098,41 +3101,51 @@ for which LSP on-type-formatting should be requested."
            (proxies
             (lambda ()
               (if (listp local-cache) local-cache
-                (let* ((resp (eglot--request server
-                                             :textDocument/completion
-                                             (eglot--CompletionParams)
-                                             :cancel-on-input t))
-                       (items (append
-                               (if (vectorp resp) resp (plist-get resp :items))
-                               nil))
-                       (cachep (and (listp resp) items
-                                    eglot-cache-session-completions
-                                    (eq (plist-get resp :isIncomplete) :json-false)))
-                       (retval
-                        (mapcar
-                         (jsonrpc-lambda
-                             (&rest item &key label insertText insertTextFormat
-                                    textEdit &allow-other-keys)
-                           (let ((proxy
-                                  ;; Snippet or textEdit, it's safe to
-                                  ;; display/insert the label since
-                                  ;; it'll be adjusted.  If no usable
-                                  ;; insertText at all, label is best,
-                                  ;; too.
-                                  (cond ((or (eql insertTextFormat 2)
-                                             textEdit
-                                             (null insertText)
-                                             (string-empty-p insertText))
-                                         (string-trim-left label))
-                                        (t insertText))))
-                             (unless (zerop (length proxy))
-                               (put-text-property 0 1 'eglot--lsp-item item proxy))
-                             proxy))
-                         items)))
-                  ;; (trace-values "Requested" (length proxies) cachep bounds)
-                  (setq eglot--capf-session
-                        (if cachep (list bounds retval resolved orig-pos) :none))
-                  (setq local-cache retval)))))
+                (let ((resp (eglot--request server
+                                            :textDocument/completion
+                                            (eglot--CompletionParams)
+                                            :cancel-on-input t)))
+                  (or (and (not resp)
+                           (listp eglot--capf-prev-session)
+                           eglot--capf-prev-session)
+                      (let* ((items (append
+                                     (if (vectorp resp) resp (plist-get resp :items))
+                                     nil))
+                             (cachep (and (listp resp) items
+                                          eglot-cache-session-completions
+                                          (eq (plist-get resp :isIncomplete) :json-false)))
+                             (bounds (or bounds
+                                         (cons (point) (point))))
+                             (markers (list (cl-first bounds) (copy-marker (point) t)))
+                             (prefix (buffer-substring-no-properties (cl-first bounds) (point)))
+                             (retval
+                              (mapcar
+                               (jsonrpc-lambda
+                                   (&rest item &key label insertText insertTextFormat
+                                          textEdit &allow-other-keys)
+                                 (let ((proxy
+                                        ;; Snippet or textEdit, it's safe to
+                                        ;; display/insert the label since
+                                        ;; it'll be adjusted.  If no usable
+                                        ;; insertText at all, label is best,
+                                        ;; too.
+                                        (cond ((or (eql insertTextFormat 2)
+                                                   textEdit
+                                                   (null insertText)
+                                                   (string-empty-p insertText))
+                                               (string-trim-left label))
+                                              (t insertText))))
+                                   (unless (zerop (length proxy))
+                                     (setq item (plist-put item :eglot--markers markers))
+                                     (setq item (plist-put item :eglot--prefix prefix))
+                                     (put-text-property 0 1 'eglot--lsp-item item proxy))
+                                   proxy))
+                               items)))
+                        ;; (trace-values "Requested" (length retval) cachep bounds)
+                        (setq eglot--capf-prev-session retval)
+                        (setq eglot--capf-session
+                              (if cachep (list bounds retval resolved orig-pos) :none))
+                        (setq local-cache retval)))))))
            (resolve-maybe
             ;; Maybe completion/resolve JSON object `lsp-comp' into
             ;; another JSON object, if at all possible.  Otherwise,
@@ -3248,7 +3261,8 @@ for which LSP on-type-formatting should be requested."
                                     (window-buffer (minibuffer-selected-window))
                                   (current-buffer))
              (eglot--dbind ((CompletionItem) insertTextFormat
-                            insertText textEdit additionalTextEdits label)
+                            insertText textEdit additionalTextEdits label
+                            eglot--markers eglot--prefix)
                  (funcall
                   resolve-maybe
                   (or (get-text-property 0 'eglot--lsp-item proxy)
@@ -3266,7 +3280,9 @@ for which LSP on-type-formatting should be requested."
                         ;; "bar" was obtained from a buffer with
                         ;; "foo.b", the LSP edit applies to that'
                         ;; state, _not_ the current "foo.bar".
-                        (delete-region orig-pos (point))
+                        (when (and eglot--prefix eglot--markers)
+                          (apply #'delete-region eglot--markers)
+                          (insert eglot--prefix))
                         (eglot--dbind ((TextEdit) range newText) textEdit
                           (pcase-let ((`(,beg . ,end)
                                        (eglot-range-region range)))
