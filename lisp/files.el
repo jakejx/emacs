@@ -7083,11 +7083,19 @@ auto-save file, if that is more recent than the visited file."
 	    #'(lambda (window _value)
 		(with-selected-window window
 		  (unwind-protect
-		      (yes-or-no-p (format "Recover auto save file %s? " file-name))
+                      (let ((prompt (format "Recover auto save file %s? " file-name))
+                            (choices
+                             '(("yes" ?y "recover auto save file")
+                               ("no" ?n "don't recover auto save file")
+                               ("diff" ?= "show changes between auto save file and current file")))
+                            ans)
+                        (while (equal "diff" (setq ans (read-answer prompt choices)))
+                          (diff file file-name))
+                        (equal ans "yes"))
 		    (when (window-live-p window)
 		      (quit-restore-window window 'kill)))))
 	    (with-current-buffer standard-output
-	      (let ((switches dired-listing-switches))
+	      (let ((switches (connection-local-value dired-listing-switches)))
 		(if (file-symlink-p file)
 		    (setq switches (concat switches " -L")))
 		;; Use insert-directory-safely, not insert-directory,
@@ -7139,7 +7147,7 @@ Then you'll be asked about a number of files to recover."
         ;; hook.
         (dired-mode-hook (delete 'dired-omit-mode dired-mode-hook)))
     (dired (concat auto-save-list-file-prefix "*")
-	   (concat dired-listing-switches " -t")))
+	   (concat (connection-local-value dired-listing-switches) " -t")))
   (use-local-map (nconc (make-sparse-keymap) (current-local-map)))
   (define-key (current-local-map) "\C-c\C-c" 'recover-session-finish)
   (save-excursion
@@ -7539,35 +7547,42 @@ default directory.  However, if FULL is non-nil, they are absolute."
 	   ;; if DIRPART contains wildcards.
 	   (dirs (if (and dirpart
 			  (string-match "[[*?]" (file-local-name dirpart)))
-		     (mapcar 'file-name-as-directory
+		     (mapcar #'file-name-as-directory
 			     (file-expand-wildcards
                               (directory-file-name dirpart) nil regexp))
 		   (list dirpart)))
 	   contents)
-      (dolist (dir dirs)
+      (dolist (dir (nreverse dirs))
 	(when (or (null dir)	; Possible if DIRPART is not wild.
 		  (file-accessible-directory-p dir))
-	  (let ((this-dir-contents
-		 ;; Filter out "." and ".."
-		 (delq nil
-                       (mapcar (lambda (name)
-                                 (unless (string-match "\\`\\.\\.?\\'"
-                                                       (file-name-nondirectory name))
-                                   name))
-			       (directory-files
-                                (or dir ".") full
-                                (if regexp
-                                    ;; We're matching each file name
-                                    ;; element separately.
-                                    (concat "\\`" nondir "\\'")
-				  (wildcard-to-regexp nondir)))))))
-	    (setq contents
-		  (nconc
-		   (if (and dir (not full))
-                       (mapcar (lambda (name) (concat dir name))
-			       this-dir-contents)
-		     this-dir-contents)
-		   contents)))))
+          (if (equal "" nondir)
+              ;; `nondir' is "" when the pattern ends in "/".  Basically ""
+              ;; refers to the directory itself, like ".", but it's not
+              ;; among the names returned by `directory-files', so we have
+              ;; to special-case it.
+              (push (or dir nondir) contents)
+	    (let ((this-dir-contents
+		   ;; Filter out "." and ".."
+		   (delq nil
+                         (mapcar (lambda (name)
+                                   (unless (string-match "\\`\\.\\.?\\'"
+                                                         (file-name-nondirectory
+                                                          name))
+                                     name))
+			         (directory-files
+                                  (or dir ".") full
+                                  (if regexp
+                                      ;; We're matching each file name
+                                      ;; element separately.
+                                      (concat "\\`" nondir "\\'")
+				   (wildcard-to-regexp nondir)))))))
+	      (setq contents
+		    (nconc
+		     (if (and dir (not full))
+			 (mapcar (lambda (name) (concat dir name))
+			         this-dir-contents)
+		       this-dir-contents)
+		     contents))))))
       contents)))
 
 (defcustom find-sibling-rules nil
@@ -7757,7 +7772,7 @@ need to be passed verbatim to shell commands."
     (purecopy "ls"))
   "Absolute or relative name of the `ls'-like program.
 This is used by `insert-directory' and `dired-insert-directory'
-(thus, also by `dired').  For Dired, this should ideally point to
+\(thus, also by `dired').  For Dired, this should ideally point to
 GNU ls, or another version of ls that supports the \"--dired\"
 flag.  See `dired-use-ls-dired'.
 
